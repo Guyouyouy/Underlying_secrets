@@ -1,0 +1,176 @@
+#include <pthread.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
+#define MAX_THREADS 10
+#define MAX_QUEUE 100
+
+typedef struct {
+    void (*function)(void* arg);
+    void* arg;
+} task_t;
+
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t notify;
+    pthread_t* threads;
+    task_t queue[MAX_QUEUE];
+    int thread_count;
+    int queue_size;
+    int head;
+    int tail;
+    int count;
+    int shutdown;
+} threadpool_t;
+
+
+threadpool_t* threadpool_create(int num_threads);
+void* threadpool_thread(void* threadpool);
+int threadpool_add(threadpool_t* pool, void (*function)(void*), void* arg);
+int threadpool_destroy(threadpool_t* pool);
+void example_task(void* arg);
+
+threadpool_t* threadpool_create(int num_threads) {
+    threadpool_t* pool;
+    if (num_threads <= 0 || num_threads > MAX_THREADS) {
+        num_threads = MAX_THREADS;
+    }
+
+    pool = (threadpool_t*)malloc(sizeof(threadpool_t));
+    if (pool == NULL) {
+        fprintf(stderr, "Failed to allocate memory for thread pool\n");
+        return NULL;
+    }
+
+    pool->threads = (pthread_t*)malloc(sizeof(pthread_t) * num_threads);
+    if (pool->threads == NULL) {
+        free(pool);
+        fprintf(stderr, "Failed to allocate memory for threads\n");
+        return NULL;
+    }
+
+    pool->thread_count = num_threads;
+    pool->queue_size = MAX_QUEUE;
+    pool->head = pool->tail = pool->count = 0;
+    pool->shutdown = 0;
+
+    if (pthread_mutex_init(&(pool->lock), NULL) != 0 || 
+        pthread_cond_init(&(pool->notify), NULL) != 0) {
+        free(pool->threads);
+        free(pool);
+        fprintf(stderr, "Failed to initialize mutex or condition variable\n");
+        return NULL;
+    }
+
+    for (int i = 0; i < num_threads; i++) {
+        if (pthread_create(&(pool->threads[i]), NULL, threadpool_thread, (void*)pool) != 0) {
+            threadpool_destroy(pool);
+            return NULL;
+        }
+    }
+
+    return pool;
+}
+
+void* threadpool_thread(void* threadpool) {
+    threadpool_t* pool = (threadpool_t*)threadpool;
+    task_t task;
+
+    while (1) {
+        pthread_mutex_lock(&(pool->lock));
+
+        while ((pool->count == 0) && (!pool->shutdown)) {
+            pthread_cond_wait(&(pool->notify), &(pool->lock));
+        }
+
+        if ((pool->shutdown) && (pool->count == 0)) {
+            pthread_mutex_unlock(&(pool->lock));
+            pthread_exit(NULL);
+        }
+
+        task.function = pool->queue[pool->head].function;
+        task.arg = pool->queue[pool->head].arg;
+        pool->head = (pool->head + 1) % pool->queue_size;
+        pool->count -= 1;
+
+        pthread_mutex_unlock(&(pool->lock));
+
+        (*(task.function))(task.arg);
+        free(task.arg);
+    }
+
+    pthread_exit(NULL);
+    return NULL;
+}
+
+int threadpool_add(threadpool_t* pool, void (*function)(void*), void* arg) {
+    int next;
+
+    if (pool == NULL || function == NULL) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&(pool->lock));
+
+    next = (pool->tail + 1) % pool->queue_size;
+
+    if (pool->count == pool->queue_size) {
+        pthread_mutex_unlock(&(pool->lock));
+        return -1;
+    }
+
+    pool->queue[pool->tail].function = function;
+    pool->queue[pool->tail].arg = arg;
+    pool->tail = next;
+    pool->count += 1;
+
+    pthread_cond_signal(&(pool->notify));
+    pthread_mutex_unlock(&(pool->lock));
+
+    return 0;
+}
+
+int threadpool_destroy(threadpool_t* pool) {
+    if (pool == NULL) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&(pool->lock));
+
+    pool->shutdown = 1;
+
+    pthread_cond_broadcast(&(pool->notify));
+    pthread_mutex_unlock(&(pool->lock));
+
+    for (int i = 0; i < pool->thread_count; i++) {
+        pthread_join(pool->threads[i], NULL);
+    }
+
+    pthread_mutex_destroy(&(pool->lock));
+    pthread_cond_destroy(&(pool->notify));
+    free(pool->threads);
+    free(pool);
+
+    return 0;
+}
+
+void example_task(void* arg) {
+    int num = *(int*)arg;
+    printf("Task executed: %d\n", num);
+}
+
+int main() {
+    threadpool_t* pool = threadpool_create(4);
+
+    for (int i = 0; i < 8; i++) {
+        int* arg = malloc(sizeof(int));
+        *arg = i;
+        threadpool_add(pool, example_task, arg);
+    }
+
+    sleep(2);
+
+    threadpool_destroy(pool);
+    return 0;
+}
