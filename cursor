@@ -1,0 +1,80 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    int id;
+    char name[50];
+} Row;
+
+typedef struct Node {
+    Row data;
+    struct Node* next;
+} Node;
+
+typedef struct {
+    Node* current;
+} Cursor;
+
+Node* createNode(int id, const char* name) {
+    Node* newNode = (Node*)malloc(sizeof(Node));
+    newNode->data.id = id;
+    strncpy(newNode->data.name, name, sizeof(newNode->data.name) - 1);
+    newNode->data.name[sizeof(newNode->data.name) - 1] = '\0';
+    newNode->next = NULL;
+    return newNode;
+}
+
+void initCursor(Cursor* cursor, Node* head) {
+    cursor->current = head;
+}
+
+int moveNext(Cursor* cursor) {
+    if (cursor->current == NULL) {
+        return 0;
+    }
+    cursor->current = cursor->current->next;
+    return cursor->current != NULL;
+}
+
+Row* getCurrentRow(Cursor* cursor) {
+    if (cursor->current == NULL) {
+        return NULL;
+    }
+    return &cursor->current->data;
+}
+
+void freeList(Node* head) {
+    Node* tmp;
+    while (head != NULL) {
+        tmp = head;
+        head = head->next;
+        free(tmp);
+    }
+}
+
+int main() {
+    Node* head = createNode(1, "Alice");
+    head->next = createNode(2, "Bob");
+    head->next->next = createNode(3, "Charlie");
+
+    Cursor cursor;
+    initCursor(&cursor, head);
+
+    Row* row;
+    while (moveNext(&cursor)) {
+        row = getCurrentRow(&cursor);
+        if (row) {
+            printf("ID: %d, Name: %s\n", row->id, row->name);
+        }
+    }
+
+    row = getCurrentRow(&cursor);
+    if (row) {
+        printf("ID: %d, Name: %s\n", row->id, row->name);
+    }
+
+    freeList(head);
+
+    return 0;
+}
